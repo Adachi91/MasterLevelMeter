@@ -52,6 +52,8 @@ private:
     float peakDbR_ = -120.0f;
     float lufsDbShort_ = -50.0f;
     float lufsDbMomentary_ = -50.0f;
+    float lufsSmoothDbShort_ = -50.0f;
+    float lufsSmoothDbMomentary_ = -50.0f;
 
     // 表示用スムージング
     float rmsSmoothDbL_ = -120.0f;
@@ -63,6 +65,8 @@ private:
     const float rmsReleaseSec_ = 0.30f;  // 300ms
     const float peakAttackSec_ = 0.04f;  // 40ms（少し遅く）
     const float peakReleaseSec_ = 0.25f; // 250ms
+    const float lufsAttackSec_ = 0.06f;
+    const float lufsReleaseSec_ = 0.30f;
 
     // ピークホールド（L/R）
     float peakHoldDbL_ = -120.0f;
