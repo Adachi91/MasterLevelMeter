@@ -85,12 +85,13 @@ private:
     float clampDbToRange(float db, float floor, float ceil) const;
     int dbToPx(float db, int widthPx) const;
     int lufsToPx(float lufs, int widthPx) const;
+    int lufsToPxBar(float lufs, int widthPx) const;
     void drawDbScale(QPainter &p, const QRect &r) const;
     void drawLevelBar(QPainter &p, const QRect &r, float dbValue) const;
     void drawPeakMarker(QPainter &p, const QRect &r, float dbValue) const;
     void drawLufsBar(QPainter &p, const QRect &r, float lufsDb) const;
     void drawBgZones(QPainter &p, const QRect &r) const;
     // 下端の控えめ目盛りのみ（数字なし）：RMS/Peak=5dB刻み、LUFS=5LU刻み
-    void drawBottomTicksDb(QPainter &p, const QRect &r) const;
-    void drawBottomTicksLUFS(QPainter &p, const QRect &r) const;
+    void drawBottomTicksDb(QPainter &p, const QRect &scaleRect, int mapLeft, int mapWidth) const;
+    void drawBottomTicksLUFS(QPainter &p, const QRect &scaleRect, int mapLeft, int mapWidth) const;
 };
