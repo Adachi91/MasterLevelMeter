@@ -229,10 +229,10 @@ bool obs_module_load(void) {
         float rmsR = (chs >= 2) ? g_levelCalc.getRMSCh(1) : rmsL;
         float peakL = (chs >= 1) ? g_levelCalc.getPeakCh(0) : g_levelCalc.getPeak();
         float peakR = (chs >= 2) ? g_levelCalc.getPeakCh(1) : peakL;
-        // LUFSはIIRスムージング後のチャンネル別値を使う
-        float lufsL = (chs >= 1) ? g_levelCalc.getSmoothedLUFSShortCh(0) : g_levelCalc.getSmoothedLUFSShort();
-        float lufsR = (chs >= 2) ? g_levelCalc.getSmoothedLUFSShortCh(1) : lufsL;
-        g_meterWidget->updateLevelsLR(rmsL, rmsR, peakL, peakR, lufsL, lufsR);
+        // LUFSはチャンネル合算（マスター）の値を表示する
+        float lufsShort = g_levelCalc.getSmoothedLUFSShort();
+        float lufsMomentary = g_levelCalc.getSmoothedLUFSMomentary();
+        g_meterWidget->updateLevelsLR(rmsL, rmsR, peakL, peakR, lufsShort, lufsMomentary);
     });
     g_updateTimer->start(16); // ~60fps
 

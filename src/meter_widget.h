@@ -3,6 +3,7 @@
 #include <QtGlobal>
 #include <array>
 #include <cstdint>
+#include <limits>
 
 class QPainter;
 class QRect;
@@ -19,8 +20,8 @@ public:
     explicit MeterWidget(QWidget *parent = nullptr);
 
 public slots:
-    void updateLevels(float rms, float peak, float lufs);
-    void updateLevelsLR(float rmsL, float rmsR, float peakL, float peakR, float lufsL, float lufsR);
+    void updateLevels(float rms, float peak, float lufsShort, float lufsMomentary = std::numeric_limits<float>::quiet_NaN());
+    void updateLevelsLR(float rmsL, float rmsR, float peakL, float peakR, float lufsShort, float lufsMomentary);
     void setMixIndex(int index);
     void setStreamingTracksMask(uint32_t mask);
 
@@ -49,8 +50,8 @@ private:
     float rmsDbR_ = -120.0f;
     float peakDbL_ = -120.0f;
     float peakDbR_ = -120.0f;
-    float lufsDbL_ = -120.0f;
-    float lufsDbR_ = -120.0f;
+    float lufsDbShort_ = -50.0f;
+    float lufsDbMomentary_ = -50.0f;
 
     // 表示用スムージング
     float rmsSmoothDbL_ = -120.0f;
@@ -75,7 +76,7 @@ private:
     float dbFloor_ = -60.0f;
     float dbCeil_  = 0.0f;
     // LUFS 専用スケール（最適化: -45 .. 0 LUFS）
-    float lufsFloor_ = -45.0f;
+    float lufsFloor_ = -50.0f;
     float lufsCeil_  = 0.0f;
 
     // ユーティリティ
