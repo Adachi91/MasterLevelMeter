@@ -157,6 +157,8 @@ void MeterWidget::updateLevelsLR(float rmsL, float rmsR, float peakL, float peak
     }
     lufsDbShort_ = clampDbToRange(lufsShort, lufsFloor_, lufsCeil_);
     lufsDbMomentary_ = clampDbToRange(lufsMomentary, lufsFloor_, lufsCeil_);
+    if (!std::isfinite(lufsSmoothDbShort_)) lufsSmoothDbShort_ = lufsDbShort_;
+    if (!std::isfinite(lufsSmoothDbMomentary_)) lufsSmoothDbMomentary_ = lufsDbMomentary_;
 
     // 時間差分q
     qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -195,6 +197,15 @@ void MeterWidget::updateLevelsLR(float rmsL, float rmsR, float peakL, float peak
     peakSmoothDbR_ = peakSmoothDbR_ + aPR * (newPeakDbR - peakSmoothDbR_);
     peakDbR_ = newPeakDbR;
 
+    // LUFSスムージング（Short/Momentary）
+    auto smoothLufs = [&](float target, float &state) {
+        float tau = (target > state) ? lufsAttackSec_ : lufsReleaseSec_;
+        float alpha = 1.0f - std::exp(-dt / std::max(0.001f, tau));
+        state = state + alpha * (target - state);
+    };
+    smoothLufs(lufsDbShort_, lufsSmoothDbShort_);
+    smoothLufs(lufsDbMomentary_, lufsSmoothDbMomentary_);
+
     // ピークホールド: L/R（瞬時値ベース）
     if (peakDbL_ > peakHoldDbL_ + 0.1f) {
         peakHoldDbL_ = peakDbL_;
@@ -226,8 +237,6 @@ static QColor zoneColorMid() { return QColor(230, 200, 60); }  // yellow
 static QColor zoneColorHigh(){ return QColor(230, 40, 50); }   // red
 
 static QColor lufsZoneColorLow() { return QColor(0x00, 0xA1, 0xA9); }
-static QColor lufsZoneColorMid() { return zoneColorLow(); }
-static QColor lufsZoneColorHigh(){ return zoneColorHigh(); }
 
 void MeterWidget::drawDbScale(QPainter &p, const QRect &r) const {
     p.save();
@@ -441,42 +450,12 @@ void MeterWidget::drawLufsBar(QPainter &p, const QRect &r, float lufsDb) const {
     p.setBrush(QColor(35, 35, 35));
     p.drawRect(r);
 
-    // 背景ゾーン（緑:-inf..-18, 黄:-18..-14, 赤:-14..0）を LUFS スケールで配置
-    int x18 = r.left() + lufsToPx(-18.f, r.width());
-    int x14 = r.left() + lufsToPx(-14.f, r.width());
-
-    QRect greenRect(r.left(), r.top(), std::max(0, x18 - r.left()), r.height());
-    QRect yellowRect(x18, r.top(), std::max(0, x14 - x18), r.height());
-    QRect redRect(x14, r.top(), std::max(0, r.right() - x14 + 1), r.height()); // underbar_length
-
-    QColor g = lufsZoneColorLow(); g.setAlpha(60);
-    QColor y = lufsZoneColorLow(); y.setAlpha(60);
-    QColor rcol = lufsZoneColorLow(); rcol.setAlpha(60);
-
-    p.fillRect(greenRect, g);
-    p.fillRect(yellowRect, y);
-    p.fillRect(redRect, rcol);
-
-    // 現在値の描画終端（LUFSスケール） - Controls the painting of the bars as they erect.
+    // 現在値の描画終端（LUFSスケール）
     int xVal = r.left() + lufsToPxBar(lufsDb, r.width());
 
     if (xVal > r.left()) {
-        int gRight = std::min(xVal, x18);
-        if (gRight > r.left()) {
-            QRect gRect(r.left(), r.top(), gRight - r.left(), r.height());
-            p.fillRect(gRect, lufsZoneColorLow());
-        }
-        if (xVal > x18) {
-            int yRight = std::min(xVal, x14);
-            if (yRight > x18) {
-                QRect yRect(x18, r.top(), yRight - x18, r.height());
-                p.fillRect(yRect, lufsZoneColorMid());
-            }
-        }
-        if (xVal > x14) {
-            QRect rr(x14, r.top() + 2, xVal - x14, r.height() - 2); //?,top_pos, height
-            p.fillRect(rr, lufsZoneColorHigh());
-        }
+        QRect barRect(r.left(), r.top(), xVal - r.left(), r.height());
+        p.fillRect(barRect, lufsZoneColorLow());
     }
 
     p.setPen(QColor(60, 60, 60));
@@ -633,14 +612,14 @@ void MeterWidget::paintEvent(QPaintEvent *event) {
 					  r2LBar.width());
 
     // 3) LUFS (Short-term)
-    drawLufsBar(p, r3LBar, lufsDbShort_);
+    drawLufsBar(p, r3LBar, lufsSmoothDbShort_);
     drawBottomTicksLUFS(p,
 						QRect(r3Frame.left(), r3Frame.bottom()+1, r3Frame.width(), (row3.bottom()-r3Frame.bottom())),
 						r3LBar.left(),
 						r3LBar.width());
 
     // 4) LUFS (Momentary)
-    drawLufsBar(p, r4LBar, lufsDbMomentary_);
+    drawLufsBar(p, r4LBar, lufsSmoothDbMomentary_);
     drawBottomTicksLUFS(p,
 						QRect(r4Frame.left(), r4Frame.bottom()+1, r4Frame.width(), (row4.bottom()-r4Frame.bottom())),
 						r4LBar.left(),
