@@ -6,6 +6,7 @@
 #include <QSettings>
 #include <QCloseEvent>
 #include <cmath>
+#include <algorithm>
 #include <QPushButton>
 #include <QButtonGroup>
 #include <QLabel>
@@ -60,7 +61,8 @@ QSize MeterWidget::minimumSizeHint() const {
     // バー領域の安全最小高さ
     int barMinH = 16;
     int rowMinH = rowTitleH + 2 + barMinH + 1 + scaleH;
-    int areaH = 3 * rowMinH + 2 * spacing;
+    constexpr int rowCount = 4;
+    int areaH = rowCount * rowMinH + (rowCount - 1) * spacing;
 
     // トップバー（ボタン＋情報）高さ・幅
     int btnH = fm.height() + 12;
@@ -119,19 +121,34 @@ int MeterWidget::lufsToPx(float lufs, int widthPx) const {
     return static_cast<int>(std::round(t * widthPx));
 }
 
-void MeterWidget::updateLevels(float rms, float peak, float lufs) {
-    updateLevelsLR(rms, rms, peak, peak, lufs, lufs);
+int MeterWidget::lufsToPxBar(float lufs, int widthPx) const {
+    float clamped = clampDbToRange(lufs, lufsFloor_, lufsCeil_);
+    float t = (clamped - lufsFloor_) / (lufsCeil_ - lufsFloor_);
+    if (t < 0.f) t = 0.f;
+    if (t > 1.f) t = 1.f;
+    return static_cast<int>(std::ceil(t * widthPx));
 }
 
-void MeterWidget::updateLevelsLR(float rmsL, float rmsR, float peakL, float peakR, float lufsL, float lufsR) {
+void MeterWidget::updateLevels(float rms, float peak, float lufsShort, float lufsMomentary) {
+    float lufsM = std::isnan(lufsMomentary) ? lufsShort : lufsMomentary;
+    updateLevelsLR(rms, rms, peak, peak, lufsShort, lufsM);
+}
+
+void MeterWidget::updateLevelsLR(float rmsL, float rmsR, float peakL, float peakR, float lufsShort, float lufsMomentary) {
     // 入力をdBに
     float newRmsDbL = clampDb(linToDb(rmsL));
     float newRmsDbR = clampDb(linToDb(rmsR));
     float newPeakDbL = clampDb(linToDb(peakL));
     float newPeakDbR = clampDb(linToDb(peakR));
-    // LUFSは専用スケールでクランプ（-45..0 LUFS）
-    lufsDbL_ = clampDbToRange(lufsL, lufsFloor_, lufsCeil_);
-    lufsDbR_ = clampDbToRange(lufsR, lufsFloor_, lufsCeil_);
+    // LUFSは専用スケールでクランプ
+    if (!std::isfinite(lufsShort)) {
+        lufsShort = lufsFloor_;
+    }
+    if (!std::isfinite(lufsMomentary)) {
+        lufsMomentary = lufsFloor_;
+    }
+    lufsDbShort_ = clampDbToRange(lufsShort, lufsFloor_, lufsCeil_);
+    lufsDbMomentary_ = clampDbToRange(lufsMomentary, lufsFloor_, lufsCeil_);
 
     // 時間差分q
     qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -200,6 +217,10 @@ static QColor zoneColorLow() { return QColor(60, 200, 80); }   // green
 static QColor zoneColorMid() { return QColor(230, 200, 60); }  // yellow
 static QColor zoneColorHigh(){ return QColor(230, 40, 50); }   // red
 
+static QColor lufsZoneColorLow() { return QColor(0x00, 0xA1, 0xA9); }
+static QColor lufsZoneColorMid() { return zoneColorLow(); }
+static QColor lufsZoneColorHigh(){ return zoneColorHigh(); }
+
 void MeterWidget::drawDbScale(QPainter &p, const QRect &r) const {
     p.save();
     Q_UNUSED(r);
@@ -208,9 +229,9 @@ void MeterWidget::drawDbScale(QPainter &p, const QRect &r) const {
 }
 
 // 下端目盛り（dBFS、5 dB刻み、数字あり）
-void MeterWidget::drawBottomTicksDb(QPainter &p, const QRect &r) const {
+void MeterWidget::drawBottomTicksDb(QPainter &p, const QRect &scaleRect, int mapLeft, int mapWidth) const {
     p.save();
-    int yBase = r.top();
+    int yBase = scaleRect.top();
     QColor minor(120,120,120,140);
     QColor major(60,60,60,200);
     // 目盛り数字用にフォントを100%へ縮小
@@ -228,7 +249,7 @@ void MeterWidget::drawBottomTicksDb(QPainter &p, const QRect &r) const {
     int th = fm.height();
 
     for (int d = -60; d <= 0; d += 5) {
-        int x = r.left() + dbToPx(static_cast<float>(d), r.width());
+        int x = mapLeft + dbToPx(static_cast<float>(d), mapWidth);
         bool isMajor = (d % 10 == 0);
         // 目盛り線色は従来どおり
         p.setPen(isMajor ? major : minor);
@@ -237,7 +258,7 @@ void MeterWidget::drawBottomTicksDb(QPainter &p, const QRect &r) const {
         // 数字は白（縮小フォント）
         QString label = QString::number(d);
         int w = fm.horizontalAdvance(label);
-        QRect tr(x - w/2 - 2, r.bottom() - th + 1, w + 4, th);
+        QRect tr(x - w/2 - 2, scaleRect.bottom() - th + 1, w + 4, th);
         p.setPen(Qt::white);
         p.drawText(tr, Qt::AlignHCenter | Qt::AlignVCenter, label);
     }
@@ -245,9 +266,9 @@ void MeterWidget::drawBottomTicksDb(QPainter &p, const QRect &r) const {
 }
 
 // 下端目盛り（LUFS、5 LU刻み、数字あり、-23/-18LUFSは強調）
-void MeterWidget::drawBottomTicksLUFS(QPainter &p, const QRect &r) const {
+void MeterWidget::drawBottomTicksLUFS(QPainter &p, const QRect &scaleRect, int mapLeft, int mapWidth) const {
     p.save();
-    int yBase = r.top();
+    int yBase = scaleRect.top();
     int start = static_cast<int>(std::ceil(lufsFloor_ / 5.0f) * 5); // -45 → -45
     int end = static_cast<int>(std::floor(lufsCeil_ / 5.0f) * 5);   // 0 → 0
     QColor minor(120,120,120,140);
@@ -270,40 +291,54 @@ void MeterWidget::drawBottomTicksLUFS(QPainter &p, const QRect &r) const {
     const int minorTickH = 5; // 5刻みの目盛り長さ
 
     for (int v = start; v <= end; v += 5) {
-        int x = r.left() + lufsToPx(static_cast<float>(v), r.width());
+        int x = mapLeft + lufsToPx(static_cast<float>(v), mapWidth);
         bool isMajor = (v % 10 == 0);
         p.setPen(isMajor ? major : minor);
         int tickH = isMajor ? 8 : minorTickH;
         p.drawLine(QPoint(x, yBase), QPoint(x, yBase + tickH));
         QString label = QString::number(v);
         int w = fm.horizontalAdvance(label);
-        QRect tr(x - w/2 - 2, r.bottom() - th + 1, w + 4, th);
+        QRect tr(x - w/2 - 2, scaleRect.bottom() - th + 1, w + 4, th);
+        Qt::Alignment align = Qt::AlignHCenter | Qt::AlignBottom;
+        if (v == start) {
+            tr = QRect(mapLeft, scaleRect.bottom() - th + 1, std::max(w + 4, w + 6), th);
+            align = Qt::AlignLeft | Qt::AlignBottom;
+        } else if (v == end) {
+            tr = QRect(mapLeft + mapWidth - (w + 6) + 1, scaleRect.bottom() - th + 1, w + 6, th);
+            align = Qt::AlignRight | Qt::AlignBottom;
+        }
         p.setPen(Qt::white);
-        p.drawText(tr, Qt::AlignHCenter | Qt::AlignVCenter, label);
+        p.drawText(tr, align, label);
     }
+    // -Inf 表示（スケール最下端の上段に追加）
+    QString infLabel = "-Inf";
+    int wInf = fm.horizontalAdvance(infLabel);
+    QRect infRect(mapLeft, yBase, wInf + 8, th);
+    p.setPen(Qt::white);
+    p.drawText(infRect, Qt::AlignLeft | Qt::AlignTop, infLabel);
     // -23 LUFS の強調（スケール内にある場合）：線長さは5刻みの目盛りと同じ、ラベルは赤
     if (lufsFloor_ <= -23.0f && -23.0f <= lufsCeil_) {
-        int x = r.left() + lufsToPx(-23.0f, r.width());
+        int x = mapLeft + lufsToPx(-23.0f, mapWidth);
         p.setPen(QPen(target, 2));
         p.drawLine(QPoint(x, yBase), QPoint(x, yBase + minorTickH));
         // ラベルを赤で上書き
         QString label = QString::number(-23);
         int w = fm.horizontalAdvance(label);
-        QRect tr(x - w/2 - 2, r.bottom() - th + 1, w + 4, th);
+        QRect tr(x - w/2 - 2, scaleRect.bottom() - th + 1, w + 4, th);
         QColor red = zoneColorHigh();
         p.setPen(red);
         p.drawText(tr, Qt::AlignHCenter | Qt::AlignVCenter, label);
     }
     // -18 LUFS の強調（スケール内にある場合）：線長さは5刻みの目盛りと同じ、ラベルはオレンジ
     if (lufsFloor_ <= -18.0f && -18.0f <= lufsCeil_) {
-        int x = r.left() + lufsToPx(-18.0f, r.width());
+        int x = mapLeft + lufsToPx(-18.0f, mapWidth);
         QColor target18(255, 160, 40, 220); // orange line
         p.setPen(QPen(target18, 2));
         p.drawLine(QPoint(x, yBase), QPoint(x, yBase + minorTickH));
         // ラベルをオレンジで上書き
         QString label = QString::number(-18);
         int w = fm.horizontalAdvance(label);
-        QRect tr(x - w/2 - 2, r.bottom() - th + 1, w + 4, th);
+        QRect tr(x - w/2 - 2, scaleRect.bottom() - th + 1, w + 4, th);
         QColor orange(255, 160, 40);
         p.setPen(orange);
         p.drawText(tr, Qt::AlignHCenter | Qt::AlignVCenter, label);
@@ -316,9 +351,9 @@ void MeterWidget::drawBgZones(QPainter &p, const QRect &r) const {
     // BGの薄い色帯（緑 | 黄(-20dBまで) | 赤(-8dBまで)）
     p.save();
     // 枠背景
-    p.setPen(QColor(60, 60, 60));
+    p.setPen(Qt::NoPen);
     p.setBrush(QColor(35, 35, 35));
-    p.drawRect(r.adjusted(0, 0, -1, -1));
+    p.drawRect(r);
 
     int x20 = r.left() + dbToPx(-20.f, r.width());
     int x8  = r.left() + dbToPx(-8.f,  r.width());
@@ -342,6 +377,8 @@ void MeterWidget::drawLevelBar(QPainter &p, const QRect &r, float dbValue) const
 
     // 背景 + 色帯（薄色）
     drawBgZones(p, r);
+
+    p.setPen(Qt::NoPen);
 
     // しきい値（-20dB, -8dB）位置
     int x20 = r.left() + dbToPx(-20.f, r.width());
@@ -372,6 +409,10 @@ void MeterWidget::drawLevelBar(QPainter &p, const QRect &r, float dbValue) const
         }
     }
 
+    p.setPen(QColor(60, 60, 60));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(r.adjusted(0, 0, -1, -1));
+
     p.restore();
 }
 
@@ -383,14 +424,14 @@ void MeterWidget::drawPeakMarker(QPainter &p, const QRect &r, float dbValue) con
     p.restore();
 }
 
-// LUFS バー（-45..0 LUFS スケールで描画）
+// LUFS バー（-50..0 LUFS スケールで描画）
 void MeterWidget::drawLufsBar(QPainter &p, const QRect &r, float lufsDb) const {
     p.save();
 
     // 枠背景
-    p.setPen(QColor(60, 60, 60));
+    p.setPen(Qt::NoPen);
     p.setBrush(QColor(35, 35, 35));
-    p.drawRect(r.adjusted(0, 0, -1, -1));
+    p.drawRect(r);
 
     // 背景ゾーン（緑:-inf..-18, 黄:-18..-14, 赤:-14..0）を LUFS スケールで配置
     int x18 = r.left() + lufsToPx(-18.f, r.width());
@@ -409,26 +450,30 @@ void MeterWidget::drawLufsBar(QPainter &p, const QRect &r, float lufsDb) const {
     p.fillRect(redRect, rcol);
 
     // 現在値の描画終端（LUFSスケール）
-    int xVal = r.left() + lufsToPx(lufsDb, r.width());
+    int xVal = r.left() + lufsToPxBar(lufsDb, r.width());
 
     if (xVal > r.left()) {
         int gRight = std::min(xVal, x18);
         if (gRight > r.left()) {
             QRect gRect(r.left(), r.top(), gRight - r.left(), r.height());
-            p.fillRect(gRect, zoneColorLow());
+            p.fillRect(gRect, lufsZoneColorLow());
         }
         if (xVal > x18) {
             int yRight = std::min(xVal, x14);
             if (yRight > x18) {
                 QRect yRect(x18, r.top(), yRight - x18, r.height());
-                p.fillRect(yRect, zoneColorMid());
+                p.fillRect(yRect, lufsZoneColorMid());
             }
         }
         if (xVal > x14) {
             QRect rr(x14, r.top(), xVal - x14, r.height());
-            p.fillRect(rr, zoneColorHigh());
+            p.fillRect(rr, lufsZoneColorHigh());
         }
     }
+
+    p.setPen(QColor(60, 60, 60));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(r.adjusted(0, 0, -1, -1));
 
     p.restore();
 }
@@ -463,38 +508,53 @@ void MeterWidget::paintEvent(QPaintEvent *event) {
     int rowTitleH = fm.height();
     int scaleH = fm.height() + 6; // 下部スケール高さ（数字込み）
 
-    int rowH = (area.height() - 2 * spacing);
-    rowH = rowH / 3; // 3行
-    if (rowH < (rowTitleH + scaleH + 22)) rowH = (rowTitleH + scaleH + 22);
+    const int rowCount = 4;
+    int totalSpacing = spacing * (rowCount - 1);
+    int availableHeight = area.height() - totalSpacing;
+    int rowH = availableHeight / rowCount;
+    int minRowH = rowTitleH + scaleH + 22;
+    if (rowH < minRowH) rowH = minRowH;
+    int usedHeight = rowH * rowCount + totalSpacing;
+    int extra = area.height() - usedHeight;
 
     QRect row1(area.left(), area.top(), area.width(), rowH);
     QRect row2(area.left(), row1.bottom() + spacing, area.width(), rowH);
     QRect row3(area.left(), row2.bottom() + spacing, area.width(), rowH);
+    QRect row4(area.left(), row3.bottom() + spacing, area.width(), rowH + std::max(0, extra));
 
-    auto makeRowRects = [&](const QRect &row) {
+    auto makeRowRects = [&](const QRect &row, int scaleHeight, bool splitBars) {
         // タイトル行
         QRect titleRect(row.left(), row.top(), row.width(), rowTitleH);
         // バーの全体枠（行全体）: 左にL/R列、下にスケールを除く
         int barTop = titleRect.bottom() + 2;
-        int barHeight = row.bottom() - scaleH - barTop; // 下部スケールの分だけ余白を確保
+        int barHeight = row.bottom() - scaleHeight - barTop; // 下部スケールの分だけ余白を確保
         if (barHeight < 16) barHeight = 16;
         QRect barFrame(row.left() + chLabelColW, barTop, row.width() - chLabelColW, barHeight);
-        // L/R の各バー領域（枠内を上下二分）
-        int halfH = (barFrame.height() - laneSpacing) / 2;
-        if (halfH < 8) halfH = 8;
-        QRect lBar(barFrame.left()+1, barFrame.top()+1, barFrame.width()-2, halfH-1);
-        int rTop = lBar.bottom() + 1 + laneSpacing;
-        if (rTop + halfH > barFrame.bottom()-1) rTop = barFrame.bottom()-1 - halfH;
-        QRect rBar(barFrame.left()+1, rTop, barFrame.width()-2, halfH-1);
-        // L/R ラベル列
-        QRect lLbl(row.left(), lBar.top(), chLabelColW-4, lBar.height());
-        QRect rLbl(row.left(), rBar.top(), chLabelColW-4, rBar.height());
+        QRect lBar;
+        QRect rBar;
+        QRect lLbl;
+        QRect rLbl;
+        if (splitBars) {
+            int halfH = (barFrame.height() - laneSpacing) / 2;
+            if (halfH < 8) halfH = 8;
+            lBar = QRect(barFrame.left()+1, barFrame.top()+1, barFrame.width()-2, halfH-1);
+            int rTop = lBar.bottom() + 1 + laneSpacing;
+            if (rTop + halfH > barFrame.bottom()-1) rTop = barFrame.bottom()-1 - halfH;
+            rBar = QRect(barFrame.left()+1, rTop, barFrame.width()-2, halfH-1);
+            lLbl = QRect(row.left(), lBar.top(), chLabelColW-4, lBar.height());
+            rLbl = QRect(row.left(), rBar.top(), chLabelColW-4, rBar.height());
+        } else {
+            lBar = QRect(barFrame.left()+1, barFrame.top()+1, barFrame.width()-2, barFrame.height()-2);
+        }
         return std::tuple<QRect,QRect,QRect,QRect,QRect,QRect>(titleRect, barFrame, lBar, rBar, lLbl, rLbl);
     };
 
-    auto [r1Title, r1Frame, r1LBar, r1RBar, r1LLbl, r1RLbl] = makeRowRects(row1);
-    auto [r2Title, r2Frame, r2LBar, r2RBar, r2LLbl, r2RLbl] = makeRowRects(row2);
-    auto [r3Title, r3Frame, r3LBar, r3RBar, r3LLbl, r3RLbl] = makeRowRects(row3);
+    auto [r1Title, r1Frame, r1LBar, r1RBar, r1LLbl, r1RLbl] = makeRowRects(row1, scaleH, true);
+    auto [r2Title, r2Frame, r2LBar, r2RBar, r2LLbl, r2RLbl] = makeRowRects(row2, scaleH, true);
+    auto [r3Title, r3Frame, r3LBar, r3UnusedBar, r3LLbl, r3RLbl] = makeRowRects(row3, scaleH, false);
+    auto [r4Title, r4Frame, r4LBar, r4UnusedBar, r4LLbl, r4RLbl] = makeRowRects(row4, scaleH, false);
+    Q_UNUSED(r3UnusedBar);
+    Q_UNUSED(r4UnusedBar);
 
     // バー塗りの関数（背景は行単位で描画）
     auto drawLevelFill = [&](QPainter &pp, const QRect &rr, float dbValue) {
@@ -523,8 +583,17 @@ void MeterWidget::paintEvent(QPaintEvent *event) {
     p.save(); p.setPen(QColor(60,60,60));
     p.drawLine(QPoint(r1Frame.left()+1, r1LBar.bottom()+1), QPoint(r1Frame.right()-1, r1LBar.bottom()+1));
     p.restore();
+    // 外枠
+    p.save();
+    p.setPen(QColor(60,60,60));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(r1Frame.adjusted(0, 0, -1, -1));
+    p.restore();
     // 下端スケール（dB）
-    drawBottomTicksDb(p, QRect(r1Frame.left(), r1Frame.bottom()+1, r1Frame.width(), (row1.bottom()-r1Frame.bottom())));
+    drawBottomTicksDb(p,
+                      QRect(r1Frame.left(), r1Frame.bottom()+1, r1Frame.width(), (row1.bottom()-r1Frame.bottom())),
+                      r1LBar.left(),
+                      r1LBar.width());
 
     // 2) Peak
     drawBgZones(p, r2Frame);
@@ -542,25 +611,38 @@ void MeterWidget::paintEvent(QPaintEvent *event) {
     p.save(); p.setPen(QColor(60,60,60));
     p.drawLine(QPoint(r2Frame.left()+1, r2LBar.bottom()+1), QPoint(r2Frame.right()-1, r2LBar.bottom()+1));
     p.restore();
-    // 下端スケール（dB）
-    drawBottomTicksDb(p, QRect(r2Frame.left(), r2Frame.bottom()+1, r2Frame.width(), (row2.bottom()-r2Frame.bottom())));
-
-    // 3) LUFS
-    // LUFSは専用スケールで背景と塗りを行う
-    drawLufsBar(p, r3LBar, lufsDbL_);
-    drawLufsBar(p, r3RBar, lufsDbR_);
-    // 中央の仕切り線（従来どおり）
-    p.save(); p.setPen(QColor(60,60,60));
-    p.drawLine(QPoint(r3Frame.left()+1, r3LBar.bottom()+1), QPoint(r3Frame.right()-1, r3LBar.bottom()+1));
+    // 外枠
+    p.save();
+    p.setPen(QColor(60,60,60));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(r2Frame.adjusted(0, 0, -1, -1));
     p.restore();
-    // 下端スケール（LUFS）
-    drawBottomTicksLUFS(p, QRect(r3Frame.left(), r3Frame.bottom()+1, r3Frame.width(), (row3.bottom()-r3Frame.bottom())));
+    // 下端スケール（dB）
+    drawBottomTicksDb(p,
+                      QRect(r2Frame.left(), r2Frame.bottom()+1, r2Frame.width(), (row2.bottom()-r2Frame.bottom())),
+                      r2LBar.left(),
+                      r2LBar.width());
+
+    // 3) LUFS (Short-term)
+    drawLufsBar(p, r3LBar, lufsDbShort_);
+    drawBottomTicksLUFS(p,
+                        QRect(r3Frame.left(), r3Frame.bottom()+1, r3Frame.width(), (row3.bottom()-r3Frame.bottom())),
+                        r3LBar.left(),
+                        r3LBar.width());
+
+    // 4) LUFS (Momentary)
+    drawLufsBar(p, r4LBar, lufsDbMomentary_);
+    drawBottomTicksLUFS(p,
+                        QRect(r4Frame.left(), r4Frame.bottom()+1, r4Frame.width(), (row4.bottom()-r4Frame.bottom())),
+                        r4LBar.left(),
+                        r4LBar.width());
 
     // テキスト類（色は白）
     p.setPen(Qt::white);
     p.drawText(r1Title.adjusted(2, 0, -2, 0), Qt::AlignLeft | Qt::AlignVCenter, "RMS");
     p.drawText(r2Title.adjusted(2, 0, -2, 0), Qt::AlignLeft | Qt::AlignVCenter, "Peak");
-    p.drawText(r3Title.adjusted(2, 0, -2, 0), Qt::AlignLeft | Qt::AlignVCenter, "LUFS");
+    p.drawText(r3Title.adjusted(2, 0, -2, 0), Qt::AlignLeft | Qt::AlignVCenter, "LUFS (S)");
+    p.drawText(r4Title.adjusted(2, 0, -2, 0), Qt::AlignLeft | Qt::AlignVCenter, "LUFS (M)");
 
     // L/R ラベル（白）: フォントを80%に縮小して描画
     p.save();
@@ -577,8 +659,18 @@ void MeterWidget::paintEvent(QPaintEvent *event) {
     p.drawText(r1RLbl, Qt::AlignLeft | Qt::AlignVCenter, "R");
     p.drawText(r2LLbl, Qt::AlignLeft | Qt::AlignVCenter, "L");
     p.drawText(r2RLbl, Qt::AlignLeft | Qt::AlignVCenter, "R");
-    p.drawText(r3LLbl, Qt::AlignLeft | Qt::AlignVCenter, "L");
-    p.drawText(r3RLbl, Qt::AlignLeft | Qt::AlignVCenter, "R");
+    if (!r3LLbl.isNull() && !r3LLbl.isEmpty()) {
+        p.drawText(r3LLbl, Qt::AlignLeft | Qt::AlignVCenter, "L");
+    }
+    if (!r3RLbl.isNull() && !r3RLbl.isEmpty()) {
+        p.drawText(r3RLbl, Qt::AlignLeft | Qt::AlignVCenter, "R");
+    }
+    if (!r4LLbl.isNull() && !r4LLbl.isEmpty()) {
+        p.drawText(r4LLbl, Qt::AlignLeft | Qt::AlignVCenter, "L");
+    }
+    if (!r4RLbl.isNull() && !r4RLbl.isEmpty()) {
+        p.drawText(r4RLbl, Qt::AlignLeft | Qt::AlignVCenter, "R");
+    }
     p.restore();
 }
 
