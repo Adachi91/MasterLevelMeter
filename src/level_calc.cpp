@@ -12,12 +12,15 @@ LevelCalc::LevelCalc()
       lufs_m_(-120.0f),
       lufs_short_(-120.0f),
       smoothed_lufs_short_(-120.0f),
+      smoothed_lufs_m_(-120.0f),
       sampleRate_(48000) {
     // 初期化
     for (auto &v : rms_ch_) v.store(0.0f, std::memory_order_relaxed);
     for (auto &v : peak_ch_) v.store(0.0f, std::memory_order_relaxed);
     for (auto &v : lufs_m_ch_) v.store(-120.0f, std::memory_order_relaxed);
     for (auto &v : lufs_short_ch_) v.store(-120.0f, std::memory_order_relaxed);
+    smoothed_lufs_short_ch_.fill(-120.0f);
+    smoothed_lufs_m_ch_.fill(-120.0f);
 }
 
 LevelCalc::~LevelCalc() {}
@@ -45,9 +48,12 @@ void LevelCalc::setChannels(size_t channels) {
         peak_ch_[ch].store(0.0f, std::memory_order_relaxed);
         lufs_m_ch_[ch].store(-120.0f, std::memory_order_relaxed);
         lufs_short_ch_[ch].store(-120.0f, std::memory_order_relaxed);
+        smoothed_lufs_short_ch_[ch] = -120.0f;
+        smoothed_lufs_m_ch_[ch] = -120.0f;
     }
     lufs_short_.store(-120.0f, std::memory_order_relaxed);
     smoothed_lufs_short_ = -120.0f;
+    smoothed_lufs_m_ = -120.0f;
     resetBlockAccumulators();
 }
 
@@ -67,6 +73,9 @@ void LevelCalc::resetBlockAccumulators() {
     lufs_m_.store(-120.0f, std::memory_order_relaxed);
     lufs_short_.store(-120.0f, std::memory_order_relaxed);
     smoothed_lufs_short_ = -120.0f;
+    smoothed_lufs_m_ = -120.0f;
+    smoothed_lufs_short_ch_.fill(-120.0f);
+    smoothed_lufs_m_ch_.fill(-120.0f);
     for (size_t ch = 0; ch < channels_; ++ch) {
         lufs_m_ch_[ch].store(-120.0f, std::memory_order_relaxed);
         lufs_short_ch_[ch].store(-120.0f, std::memory_order_relaxed);
@@ -245,11 +254,21 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
 
     // --- LUFS Momentary値のスムージング ---
     float lufs_m_now = lufs_m_.load(std::memory_order_relaxed);
-    static float smoothed_lufs_m = -120.0f;
     float alpha_m = 0.15f; // RMS/Peakと同等の滑らかさに調整
-    if (smoothed_lufs_m < -100.0f) smoothed_lufs_m = lufs_m_now;
-    else smoothed_lufs_m = alpha_m * lufs_m_now + (1.0f - alpha_m) * smoothed_lufs_m;
-    // 必要に応じてgetterを追加してUIで利用可能に
+    if (lufs_m_now < -100.0f) {
+        // 十分なウィンドウがない場合は直近のshort値で初期化
+        lufs_m_now = lufs_short_.load(std::memory_order_relaxed);
+    }
+    if (smoothed_lufs_m_ < -100.0f) smoothed_lufs_m_ = lufs_m_now;
+    else smoothed_lufs_m_ = alpha_m * lufs_m_now + (1.0f - alpha_m) * smoothed_lufs_m_;
+    for (size_t ch = 0; ch < channels_; ++ch) {
+        float lufs_m_ch_now = lufs_m_ch_[ch].load(std::memory_order_relaxed);
+        if (lufs_m_ch_now < -100.0f) {
+            lufs_m_ch_now = lufs_short_ch_[ch].load(std::memory_order_relaxed);
+        }
+        if (smoothed_lufs_m_ch_[ch] < -100.0f) smoothed_lufs_m_ch_[ch] = lufs_m_ch_now;
+        else smoothed_lufs_m_ch_[ch] = alpha_m * lufs_m_ch_now + (1.0f - alpha_m) * smoothed_lufs_m_ch_[ch];
+    }
 
     float denom = static_cast<float>(frames) * static_cast<float>(channels_);
     if (denom <= 0.0f) denom = 1.0f;
@@ -299,4 +318,11 @@ float LevelCalc::getLUFSShortCh(size_t ch) const {
 float LevelCalc::getSmoothedLUFSShortCh(size_t ch) const {
     if (ch >= channels_) return -120.0f;
     return smoothed_lufs_short_ch_[ch];
+}
+
+float LevelCalc::getSmoothedLUFSMomentary() const { return smoothed_lufs_m_; }
+
+float LevelCalc::getSmoothedLUFSMomentaryCh(size_t ch) const {
+    if (ch >= channels_) return -120.0f;
+    return smoothed_lufs_m_ch_[ch];
 }
