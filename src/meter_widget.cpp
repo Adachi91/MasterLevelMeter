@@ -447,7 +447,7 @@ void MeterWidget::drawLufsBar(QPainter &p, const QRect &r, float lufsDb) const {
 
     QRect greenRect(r.left(), r.top(), std::max(0, x18 - r.left()), r.height());
     QRect yellowRect(x18, r.top(), std::max(0, x14 - x18), r.height());
-    QRect redRect(x14, r.top(), std::max(0, r.right() - x14 + 1), r.height());
+    QRect redRect(x14, r.top(), std::max(0, r.right() - x14), r.height());
 
     QColor g = zoneColorLow(); g.setAlpha(60);
     QColor y = zoneColorMid(); y.setAlpha(60);

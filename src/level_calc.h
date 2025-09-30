@@ -72,6 +72,8 @@ private:
     std::atomic<uint32_t> sampleRate_;
     size_t channels_ = 0;
     std::array<size_t, 2> meterChans_{0, 1};
+    bool mReady_ = false;
+    bool sReady_ = false;
 
     // K-weighting フィルタ
     struct FirstOrderHP {

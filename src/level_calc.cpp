@@ -44,6 +44,8 @@ void LevelCalc::setChannels(size_t channels) {
     rollingSubSum_.assign(channels_, 0.0);
     recentSubblocksShort_.assign(channels_, {});
     rollingSubSumShort_.assign(channels_, 0.0);
+    mReady_ = false;
+    sReady_ = false;
     for (size_t ch = 0; ch < kMaxChannels; ++ch) {
         rms_ch_[ch].store(0.0f, std::memory_order_relaxed);
         peak_ch_[ch].store(0.0f, std::memory_order_relaxed);
@@ -71,6 +73,8 @@ void LevelCalc::resetBlockAccumulators() {
     rollingSubSum_.assign(channels_, 0.0);
     recentSubblocksShort_.assign(channels_, {});
     rollingSubSumShort_.assign(channels_, 0.0);
+    mReady_ = false;
+    sReady_ = false;
     lufs_m_.store(-120.0f, std::memory_order_relaxed);
     lufs_short_.store(-120.0f, std::memory_order_relaxed);
     smoothed_lufs_short_ = -120.0f;
@@ -190,21 +194,37 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
             for (size_t ch = 0; ch < channels_; ++ch) {
                 if (recentSubblocks_[ch].size() < 4) { haveWindow = false; break; }
             }
+            mReady_ = haveWindow;
             if (haveWindow) {
+                auto meanEnergy = [&](size_t ch) -> double {
+                    if (ch >= rollingSubSum_.size()) return 0.0;
+                    return rollingSubSum_[ch] / 4.0;
+                };
+
                 double energySum = 0.0;
-                for (size_t idx : meterChans_) {
-                    if (idx >= channels_) continue;
-                    energySum += (rollingSubSum_[idx] / 4.0);
+                if (channels_ == 1) {
+                    energySum = 2.0 * meanEnergy(0);
+                } else {
+                    if (channels_ >= 1) energySum += meanEnergy(0);
+                    if (channels_ >= 2) energySum += meanEnergy(1);
                 }
 
                 const double offset = -0.691;
                 double lufs_m = offset + 10.0 * std::log10(std::max(energySum, 1e-12));
-                lufs_m_.store(static_cast<float>(lufs_m), std::memory_order_relaxed);
+                float lufs_m_f = static_cast<float>(lufs_m);
+                lufs_m_.store(lufs_m_f, std::memory_order_relaxed);
+
+                const float alpha_m = 0.35f;
+                if (smoothed_lufs_m_ < -100.0f) smoothed_lufs_m_ = lufs_m_f;
+                else smoothed_lufs_m_ = alpha_m * lufs_m_f + (1.0f - alpha_m) * smoothed_lufs_m_;
 
                 for (size_t ch = 0; ch < channels_; ++ch) {
-                    double eCh = rollingSubSum_[ch] / 4.0;
+                    double eCh = meanEnergy(ch);
                     double lufs_m_ch = offset + 10.0 * std::log10(std::max(eCh, 1e-12));
-                    lufs_m_ch_[ch].store(static_cast<float>(lufs_m_ch), std::memory_order_relaxed);
+                    float lufs_m_ch_f = static_cast<float>(lufs_m_ch);
+                    lufs_m_ch_[ch].store(lufs_m_ch_f, std::memory_order_relaxed);
+                    if (smoothed_lufs_m_ch_[ch] < -100.0f) smoothed_lufs_m_ch_[ch] = lufs_m_ch_f;
+                    else smoothed_lufs_m_ch_[ch] = alpha_m * lufs_m_ch_f + (1.0f - alpha_m) * smoothed_lufs_m_ch_[ch];
                 }
                 // Integrated の蓄積・ゲート処理は削除
             }
@@ -224,61 +244,41 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
             for (size_t ch = 0; ch < channels_; ++ch) {
                 if (recentSubblocksShort_[ch].size() < kShortWindowBlocks) { haveShortWindow = false; break; }
             }
+            sReady_ = haveShortWindow;
             if (haveShortWindow) {
+                auto meanEnergyShort = [&](size_t ch) -> double {
+                    if (ch >= rollingSubSumShort_.size()) return 0.0;
+                    return rollingSubSumShort_[ch] / static_cast<double>(kShortWindowBlocks);
+                };
+
                 double energySumShort = 0.0;
-                for (size_t idx : meterChans_) {
-                    if (idx >= channels_) continue;
-                    energySumShort += (rollingSubSumShort_[idx] / static_cast<double>(kShortWindowBlocks));
+                if (channels_ == 1) {
+                    energySumShort = 2.0 * meanEnergyShort(0);
+                } else {
+                    if (channels_ >= 1) energySumShort += meanEnergyShort(0);
+                    if (channels_ >= 2) energySumShort += meanEnergyShort(1);
                 }
                 const double offset = -0.691;
                 double lufs_short = offset + 10.0 * std::log10(std::max(energySumShort, 1e-12));
-                lufs_short_.store(static_cast<float>(lufs_short), std::memory_order_relaxed);
+                float lufs_short_f = static_cast<float>(lufs_short);
+                lufs_short_.store(lufs_short_f, std::memory_order_relaxed);
+
+                const float alpha_short = 0.25f;
+                if (smoothed_lufs_short_ < -100.0f) smoothed_lufs_short_ = lufs_short_f;
+                else smoothed_lufs_short_ = alpha_short * lufs_short_f + (1.0f - alpha_short) * smoothed_lufs_short_;
+
                 for (size_t ch = 0; ch < channels_; ++ch) {
-                    double eCh = rollingSubSumShort_[ch] / static_cast<double>(kShortWindowBlocks);
+                    double eCh = meanEnergyShort(ch);
                     double lufs_short_ch = offset + 10.0 * std::log10(std::max(eCh, 1e-12));
-                    lufs_short_ch_[ch].store(static_cast<float>(lufs_short_ch), std::memory_order_relaxed);
+                    float lufs_short_ch_f = static_cast<float>(lufs_short_ch);
+                    lufs_short_ch_[ch].store(lufs_short_ch_f, std::memory_order_relaxed);
+                    if (smoothed_lufs_short_ch_[ch] < -100.0f) smoothed_lufs_short_ch_[ch] = lufs_short_ch_f;
+                    else smoothed_lufs_short_ch_[ch] = alpha_short * lufs_short_ch_f + (1.0f - alpha_short) * smoothed_lufs_short_ch_[ch];
                 }
             }
             hopSampleCount_ = 0;
         }
     }
-    // --- LUFS Short値のスムージング ---
-    float lufs_short_now = lufs_short_.load(std::memory_order_relaxed);
-    float alpha_short = 0.15f;
-    if (lufs_short_now < -100.0f) {
-        // まだ十分なデータが溜まっていない場合は、momentary値で初期化
-        lufs_short_now = lufs_m_.load(std::memory_order_relaxed);
-    }
-    if (smoothed_lufs_short_ < -100.0f) smoothed_lufs_short_ = lufs_short_now;
-    else smoothed_lufs_short_ = alpha_short * lufs_short_now + (1.0f - alpha_short) * smoothed_lufs_short_;
-    // --- チャンネルごとのLUFS Shortスムージング ---
-    for (size_t ch = 0; ch < channels_; ++ch) {
-        float lufs_short_ch_now = lufs_short_ch_[ch].load(std::memory_order_relaxed);
-        if (lufs_short_ch_now < -100.0f) {
-            lufs_short_ch_now = lufs_m_ch_[ch].load(std::memory_order_relaxed);
-        }
-        if (smoothed_lufs_short_ch_[ch] < -100.0f) smoothed_lufs_short_ch_[ch] = lufs_short_ch_now;
-        else smoothed_lufs_short_ch_[ch] = alpha_short * lufs_short_ch_now + (1.0f - alpha_short) * smoothed_lufs_short_ch_[ch];
-    }
-
-    // --- LUFS Momentary値のスムージング ---
-    float lufs_m_now = lufs_m_.load(std::memory_order_relaxed);
-    float alpha_m = 0.15f; // RMS/Peakと同等の滑らかさに調整
-    if (lufs_m_now < -100.0f) {
-        // 十分なウィンドウがない場合は直近のshort値で初期化
-        lufs_m_now = lufs_short_.load(std::memory_order_relaxed);
-    }
-    if (smoothed_lufs_m_ < -100.0f) smoothed_lufs_m_ = lufs_m_now;
-    else smoothed_lufs_m_ = alpha_m * lufs_m_now + (1.0f - alpha_m) * smoothed_lufs_m_;
-    for (size_t ch = 0; ch < channels_; ++ch) {
-        float lufs_m_ch_now = lufs_m_ch_[ch].load(std::memory_order_relaxed);
-        if (lufs_m_ch_now < -100.0f) {
-            lufs_m_ch_now = lufs_short_ch_[ch].load(std::memory_order_relaxed);
-        }
-        if (smoothed_lufs_m_ch_[ch] < -100.0f) smoothed_lufs_m_ch_[ch] = lufs_m_ch_now;
-        else smoothed_lufs_m_ch_[ch] = alpha_m * lufs_m_ch_now + (1.0f - alpha_m) * smoothed_lufs_m_ch_[ch];
-    }
-
     float denom = static_cast<float>(frames) * static_cast<float>(channels_);
     if (denom <= 0.0f) denom = 1.0f;
     float rms = std::sqrt(sum_sqr_raw / denom);
