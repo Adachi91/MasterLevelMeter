@@ -447,17 +447,17 @@ void MeterWidget::drawLufsBar(QPainter &p, const QRect &r, float lufsDb) const {
 
     QRect greenRect(r.left(), r.top(), std::max(0, x18 - r.left()), r.height());
     QRect yellowRect(x18, r.top(), std::max(0, x14 - x18), r.height());
-    QRect redRect(x14, r.top(), std::max(0, r.right() - x14), r.height());
+    QRect redRect(x14, r.top(), std::max(0, r.right() - x14 + 1), r.height()); // underbar_length
 
-    QColor g = zoneColorLow(); g.setAlpha(60);
-    QColor y = zoneColorMid(); y.setAlpha(60);
-    QColor rcol = zoneColorHigh(); rcol.setAlpha(60);
+    QColor g = lufsZoneColorLow(); g.setAlpha(60);
+    QColor y = lufsZoneColorLow(); y.setAlpha(60);
+    QColor rcol = lufsZoneColorLow(); rcol.setAlpha(60);
 
     p.fillRect(greenRect, g);
     p.fillRect(yellowRect, y);
     p.fillRect(redRect, rcol);
 
-    // 現在値の描画終端（LUFSスケール）
+    // 現在値の描画終端（LUFSスケール） - Controls the painting of the bars as they erect.
     int xVal = r.left() + lufsToPxBar(lufsDb, r.width());
 
     if (xVal > r.left()) {
@@ -474,14 +474,14 @@ void MeterWidget::drawLufsBar(QPainter &p, const QRect &r, float lufsDb) const {
             }
         }
         if (xVal > x14) {
-            QRect rr(x14, r.top(), xVal - x14, r.height());
+            QRect rr(x14, r.top() + 2, xVal - x14, r.height() - 2); //?,top_pos, height
             p.fillRect(rr, lufsZoneColorHigh());
         }
     }
 
     p.setPen(QColor(60, 60, 60));
     p.setBrush(Qt::NoBrush);
-    p.drawRect(r.adjusted(0, 0, -1, -1));
+    p.drawRect(r.adjusted(0, 0, -1, -1)); // controls the center line for R/L
 
     p.restore();
 }
