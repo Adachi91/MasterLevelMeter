@@ -63,6 +63,7 @@ macOSにMasterLevelMeter.pluginをインストールする際、次のような�
 - RMS
 - Peak
 - Short LUFS (3秒 ITU-R BS.1770 K-weighted 処理)
+- Momentary LUFS (400ms ITU-R BS.1770 K-weighted)
 - K-weighting フィルタ:
 - 二段ハイパス (60Hz) + High-shelf (+4 dB @ ~1.7 kHz) 実装
 - -23 / -18 LUFS 強調目盛り
@@ -78,8 +79,9 @@ macOSにMasterLevelMeter.pluginをインストールする際、次のような�
 
   
 
-### Loudness (Short)
+### Loudness (Short / Momentary)
 - Short: 3000ms ウィンドウ平均エネルギー（ch 合算）→ -0.691 オフセット
+- Momentary: 400ms ウィンドウ平均エネルギー（ch 合算）→ -0.691 オフセット
 
 ---
 ## Qt 6 Usage
@@ -260,6 +262,7 @@ Click Open. From now on, the plugin will load automatically.
 - RMS
 - Peak
 - Short LUFS (3000 ms ITU-R BS.1770 K-weighted)
+- Momentary LUFS (400 ms ITU-R BS.1770 K-weighted)
 - K-weighting filter:
 - Two-stage high-pass (60 Hz) + high-shelf (+4 dB @ ~1.7 kHz)
 - Emphasis ticks at -23 / -18 LUFS
@@ -272,8 +275,9 @@ Click Open. From now on, the plugin will load automatically.
 3. K-weighting & sub-block processing (100 ms hop / 3000 ms window)
 4. A ~60 fps Qt timer calls `updateLevelsLR()` → triggers repaint
 
-### Loudness (Short)
+### Loudness (Short / Momentary)
 - Short: 3000 ms sliding window energy (summed channels) with -0.691 offset
+- Momentary: 400 ms sliding window energy (summed channels) with -0.691 offset
 
 ---
 ## Qt 6 Usage

@@ -39,6 +39,8 @@ public:
     float getSmoothedLUFSShort() const;
     float getLUFSShortCh(size_t ch) const;
     float getSmoothedLUFSShortCh(size_t ch) const;
+    float getSmoothedLUFSMomentary() const;
+    float getSmoothedLUFSMomentaryCh(size_t ch) const;
 
 private:
     static constexpr size_t kMaxChannels = 8;
@@ -62,6 +64,8 @@ private:
     std::array<std::atomic<float>, kMaxChannels> lufs_short_ch_{};
     float smoothed_lufs_short_ = -120.0f;
     std::array<float, kMaxChannels> smoothed_lufs_short_ch_{};
+    float smoothed_lufs_m_ = -120.0f;
+    std::array<float, kMaxChannels> smoothed_lufs_m_ch_{};
     std::vector<std::deque<double>> recentSubblocksShort_;
     std::vector<double> rollingSubSumShort_;
 
