@@ -36,6 +36,7 @@ void LevelCalc::setSampleRate(uint32_t sampleRate) {
 
 void LevelCalc::setChannels(size_t channels) {
     channels_ = std::min(channels, kMaxChannels);
+    meterChans_ = {0, 1};
     initFiltersIfNeeded(channels_);
     updateFilterCoeffs();
     sumSquaresHop_.assign(channels_, 0.0);
@@ -135,6 +136,7 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
 
     std::vector<double> sumSqrPerCh(channels_, 0.0);
     std::vector<float> peakPerCh(channels_, 0.0f);
+    std::vector<double> ms100(channels_, 0.0);
 
     uint32_t fs = sampleRate_.load(std::memory_order_relaxed);
     if (fs == 0) fs = 48000;
@@ -164,12 +166,17 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
 
         ++hopSampleCount_;
         if (hopSampleCount_ >= hopSamples_) {
-            // 100ms 小ブロック確定
             for (size_t ch = 0; ch < channels_; ++ch) {
                 double ms = (hopSamples_ > 0)
                                 ? (sumSquaresHop_[ch] / static_cast<double>(hopSamples_))
                                 : 0.0;
+                ms100[ch] = ms;
                 sumSquaresHop_[ch] = 0.0;
+            }
+
+            // 100ms 小ブロックを Momentary 用に追加
+            for (size_t ch = 0; ch < channels_; ++ch) {
+                double ms = ms100[ch];
                 if (recentSubblocks_[ch].size() == 4) {
                     rollingSubSum_[ch] -= recentSubblocks_[ch].front();
                     recentSubblocks_[ch].pop_front();
@@ -185,8 +192,10 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
             }
             if (haveWindow) {
                 double energySum = 0.0;
-                for (size_t ch = 0; ch < channels_; ++ch)
-                    energySum += (rollingSubSum_[ch] / 4.0);
+                for (size_t idx : meterChans_) {
+                    if (idx >= channels_) continue;
+                    energySum += (rollingSubSum_[idx] / 4.0);
+                }
 
                 const double offset = -0.691;
                 double lufs_m = offset + 10.0 * std::log10(std::max(energySum, 1e-12));
@@ -199,11 +208,10 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
                 }
                 // Integrated の蓄積・ゲート処理は削除
             }
+
             // --- Short LUFS用 ---
             for (size_t ch = 0; ch < channels_; ++ch) {
-                double ms = (hopSamples_ > 0)
-                                ? (sumSquaresHop_[ch] / static_cast<double>(hopSamples_))
-                                : 0.0;
+                double ms = ms100[ch];
                 if (recentSubblocksShort_[ch].size() == kShortWindowBlocks) {
                     rollingSubSumShort_[ch] -= recentSubblocksShort_[ch].front();
                     recentSubblocksShort_[ch].pop_front();
@@ -217,12 +225,13 @@ void LevelCalc::process(float **data, uint32_t frames, size_t channels) {
                 if (recentSubblocksShort_[ch].size() < kShortWindowBlocks) { haveShortWindow = false; break; }
             }
             if (haveShortWindow) {
-                double energySum = 0.0;
-                for (size_t ch = 0; ch < channels_; ++ch) {
-                    energySum += (rollingSubSumShort_[ch] / static_cast<double>(kShortWindowBlocks));
+                double energySumShort = 0.0;
+                for (size_t idx : meterChans_) {
+                    if (idx >= channels_) continue;
+                    energySumShort += (rollingSubSumShort_[idx] / static_cast<double>(kShortWindowBlocks));
                 }
                 const double offset = -0.691;
-                double lufs_short = offset + 10.0 * std::log10(std::max(energySum, 1e-12));
+                double lufs_short = offset + 10.0 * std::log10(std::max(energySumShort, 1e-12));
                 lufs_short_.store(static_cast<float>(lufs_short), std::memory_order_relaxed);
                 for (size_t ch = 0; ch < channels_; ++ch) {
                     double eCh = rollingSubSumShort_[ch] / static_cast<double>(kShortWindowBlocks);
