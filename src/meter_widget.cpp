@@ -646,10 +646,6 @@ void MeterWidget::paintEvent(QPaintEvent *event) {
 						r4LBar.left(),
 						r4LBar.width());
 
-    // 4) LUFS (Momentary)
-    drawLufsBar(p, r4LBar, lufsDbMomentary_);
-    drawBottomTicksLUFS(p, QRect(r4Frame.left(), r4Frame.bottom()+1, r4Frame.width(), (row4.bottom()-r4Frame.bottom())));
-
     // テキスト類（色は白）
     p.setPen(Qt::white);
     p.drawText(r1Title.adjusted(2, 0, -2, 0), Qt::AlignLeft | Qt::AlignVCenter, "RMS");
